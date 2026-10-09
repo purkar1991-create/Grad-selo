@@ -29,9 +29,15 @@ input[type=text]:focus{border-color:var(--primary)}
 .player{background:var(--panel);border-left:5px solid var(--primary);border-radius:10px;padding:12px;margin-bottom:10px}
 .player.me{border-left-color:var(--ok)}
 .player h3{margin:0 0 6px;font-size:16px;display:flex;justify-content:space-between;gap:8px}
-.row{font-size:15px;margin:3px 0;display:flex;justify-content:space-between;gap:8px}
-.row .pts{font-weight:bold;color:var(--ok);white-space:nowrap}
-.row .pts.zero{color:var(--danger)}
+.row{font-size:15px;margin:6px 0;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.row .txt{flex:1;min-width:120px;word-break:break-word}
+.row .txt.bad{text-decoration:line-through;color:var(--muted)}
+.row .side{display:flex;align-items:center;gap:6px}
+.pts{font-weight:bold;color:var(--ok);white-space:nowrap;min-width:22px;text-align:right}
+.pts.zero{color:var(--danger)}
+.mini{font-size:13px;padding:5px 9px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);text-decoration:none;cursor:pointer;white-space:nowrap;font-family:inherit}
+.mini.active{background:var(--danger);border-color:var(--danger);color:#fff}
+.cnt{font-size:12px;color:var(--danger);width:100%}
 .sub,.note{font-size:13px;color:var(--muted);margin-top:8px}
 </style>
 
@@ -63,7 +69,6 @@ input[type=text]:focus{border-color:var(--primary)}
 </div>
 
 <script>
-// ===== ZALIJEPI SVOJU FIREBASE KONFIGURACIJU (Project settings → Your apps → Config) =====
 const firebaseConfig = {
   apiKey: "AIzaSyAWdNdRFvZJPe0f-_14n0mbACTbl7NehT4",
   authDomain: "grad-selo.firebaseapp.com",
@@ -73,7 +78,6 @@ const firebaseConfig = {
   messagingSenderId: "897832366867",
   appId: "1:897832366867:web:6e4ec3ce248ef47f39a0e6"
 };
-// ========================================================================================
 
 (function(){
   var ABECEDA=['A','B','C','Č','Ć','D','Dž','Đ','E','F','G','H','I','J','K','L','Lj','M','N','Nj','O','P','R','S','Š','T','U','V','Z','Ž'];
@@ -83,8 +87,9 @@ const firebaseConfig = {
 
   var state={status:'cekanje',letter:'?',round:0,endsAt:0};
   var answers={};
+  var disputes={};
   var submittedRound=-1, tick=null, lastRound=-1, lastStatus='';
-  var offset=0; // razlika sata mobitela i poslužitelja
+  var offset=0;
 
   function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v);}catch(e){}return null;}
   var myId=store('dgs_id');
@@ -97,16 +102,11 @@ const firebaseConfig = {
   function norm(s){return (s||'').trim().toLowerCase();}
   function now(){return Date.now()+offset;}
 
-  if(firebaseConfig.apiKey.indexOf('VAŠ')===0){
-    $('status').textContent='Firebase konfiguracija nije upisana.';
-    $('note').textContent='Otvori index.html i zamijeni firebaseConfig svojim podacima.';
-    return;
-  }
-
   firebase.initializeApp(firebaseConfig);
   var fdb=firebase.database();
   var stateRef=fdb.ref('igra/stanje');
   var answersRef=fdb.ref('igra/odgovori');
+  var disputesRef=fdb.ref('igra/osporavanja');
 
   fdb.ref('.info/serverTimeOffset').on('value',function(s){offset=s.val()||0;});
 
@@ -114,7 +114,7 @@ const firebaseConfig = {
 
   function startRound(){
     var l=ABECEDA[Math.floor(Math.random()*ABECEDA.length)];
-    answersRef.remove().then(function(){
+    Promise.all([answersRef.remove(),disputesRef.remove()]).then(function(){
       return stateRef.set({status:'igra',letter:l,round:(state.round||0)+1,endsAt:now()+ROUND_SECONDS*1000});
     });
   }
@@ -127,25 +127,37 @@ const firebaseConfig = {
     answersRef.child(myId).set({name:myName||'Igrač',round:state.round,vals:readInputs()});
   }
 
+  /* ---------- osporavanja ---------- */
+  function disputeObj(key){
+    var r=disputes[state.round];
+    return (r&&r[key])||{};
+  }
+  function disputeCount(key){return Object.keys(disputeObj(key)).length;}
+  function iDisputed(key){return !!disputeObj(key)[myId];}
+
+  /* ---------- bodovanje ---------- */
   function score(){
     var cur=[];
     Object.keys(answers).forEach(function(k){if(answers[k].round===state.round)cur.push({id:k,rec:answers[k]});});
-    var L=norm(state.letter),counts={};
+    var n=cur.length,L=norm(state.letter),counts={};
+    function valid(raw){var v=norm(raw);return !!v&&v.indexOf(L)===0;}
+    function disputed(id,f){return n>1&&disputeCount(id+'_'+f)>(n-1)/2;}
     POLJA.forEach(function(p){
       counts[p[0]]={};
       cur.forEach(function(c){
-        var v=norm(c.rec.vals&&c.rec.vals[p[0]]);
-        if(v&&v.indexOf(L)===0)counts[p[0]][v]=(counts[p[0]][v]||0)+1;
+        var raw=c.rec.vals&&c.rec.vals[p[0]];
+        if(valid(raw)&&!disputed(c.id,p[0])){var v=norm(raw);counts[p[0]][v]=(counts[p[0]][v]||0)+1;}
       });
     });
     var out=cur.map(function(c){
       var total=0,rows=POLJA.map(function(p){
-        var raw=(c.rec.vals&&c.rec.vals[p[0]])||'',v=norm(raw),pts=0;
-        if(v&&v.indexOf(L)===0)pts=counts[p[0]][v]>1?5:10;
+        var raw=(c.rec.vals&&c.rec.vals[p[0]])||'',key=c.id+'_'+p[0];
+        var isD=disputed(c.id,p[0]),pts=0;
+        if(valid(raw)&&!isD)pts=counts[p[0]][norm(raw)]>1?5:10;
         total+=pts;
-        return {label:p[1],raw:raw,pts:pts};
+        return {key:key,label:p[1],raw:raw,pts:pts,disputed:isD,count:disputeCount(key),mine:c.id===myId,validStart:valid(raw)};
       });
-      return {id:c.id,name:c.rec.name||'Igrač',rows:rows,total:total};
+      return {id:c.id,name:c.rec.name||'Igrač',rows:rows,total:total,n:n};
     });
     out.sort(function(a,b){return b.total-a.total;});
     return out;
@@ -162,7 +174,7 @@ const firebaseConfig = {
     $('startBtn').textContent=s==='cekanje'?'POKRENI IGRU (svi igraju)':'NOVA RUNDA (svi igraju)';
     if(s==='cekanje'){$('status').textContent='Čeka se pokretanje igre…';$('timer').textContent='';}
     else if(s==='igra'){$('status').textContent='Runda '+state.round+' je u tijeku! Pišite!';}
-    else{$('status').textContent='Runda završena!';$('timer').textContent='';}
+    else{$('status').textContent='Runda završena! Provjeri tuđe odgovore.';$('timer').textContent='';}
 
     var res=$('results');
     if(s==='stop'){
@@ -171,16 +183,34 @@ const firebaseConfig = {
         var me=p.id===myId;
         h+='<div class="player'+(me?' me':'')+'"><h3><span>'+(i===0&&list.length>1?'🏆 ':'')+esc(p.name)+(me?' (ti)':'')+'</span><span>'+p.total+' bod.</span></h3>';
         p.rows.forEach(function(r){
-          h+='<div class="row"><span>'+esc(r.label)+': '+(r.raw?esc(r.raw):'-')+'</span><span class="pts'+(r.pts?'':' zero')+'">'+r.pts+'</span></div>';
+          var q=encodeURIComponent(r.raw+' '+r.label.toLowerCase());
+          h+='<div class="row"><span class="txt'+(r.disputed?' bad':'')+'">'+esc(r.label)+': '+(r.raw?esc(r.raw):'-')+'</span><span class="side">';
+          if(r.raw){
+            h+='<a class="mini" target="_blank" rel="noopener" href="https://www.google.com/search?q='+q+'">🔍 Google</a>';
+            if(!r.mine&&p.n>1){
+              h+='<button class="mini'+(iDisputed(r.key)?' active':'')+'" data-dispute="'+r.key+'">'+(iDisputed(r.key)?'Povuci':'Osporavam')+'</button>';
+            }
+          }
+          h+='<span class="pts'+(r.pts?'':' zero')+'">'+r.pts+'</span></span>';
+          if(r.count>0)h+='<span class="cnt">Osporava: '+r.count+(r.disputed?' – odgovor je odbijen':'')+'</span>';
+          h+='</div>';
         });
         h+='</div>';
       });
       if(!list.length)h='<div class="sub">Čekam odgovore igrača…</div>';
-      h+='<div class="sub">Bodovi: 10 za jedinstven pojam, 5 ako ga je upisao još netko, 0 ako je prazno ili ne počinje zadanim slovom.</div>';
+      h+='<div class="sub">Bodovi: 10 za jedinstven pojam, 5 ako ga je upisao još netko, 0 ako je prazno ili ne počinje zadanim slovom. Ako većina ostalih igrača osporava odgovor, nosi 0 bodova. 🔍 otvara Google pretragu.</div>';
       res.innerHTML=h;res.classList.remove('hidden');
     } else res.classList.add('hidden');
     runTimer();
   }
+
+  $('results').addEventListener('click',function(e){
+    var b=e.target.closest('[data-dispute]');
+    if(!b)return;
+    var key=b.getAttribute('data-dispute');
+    var ref=disputesRef.child(String(state.round)).child(key).child(myId);
+    if(iDisputed(key))ref.remove();else ref.set(true);
+  });
 
   function runTimer(){
     clearInterval(tick);
@@ -207,6 +237,10 @@ const firebaseConfig = {
 
   answersRef.on('value',function(snap){
     answers=snap.val()||{};
+    if(state.status==='stop')render();
+  });
+  disputesRef.on('value',function(snap){
+    disputes=snap.val()||{};
     if(state.status==='stop')render();
   });
 
