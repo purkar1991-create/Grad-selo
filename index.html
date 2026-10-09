@@ -62,6 +62,10 @@ input[type=text]:focus{border-color:var(--primary)}
     <div class="ig"><label>Grad</label><input type="text" id="in-grad" autocomplete="off"></div>
     <div class="ig"><label>Selo</label><input type="text" id="in-selo" autocomplete="off"></div>
     <div class="ig"><label>Životinja</label><input type="text" id="in-zivotinja" autocomplete="off"></div>
+    <div class="ig"><label>Rijeka</label><input type="text" id="in-rijeka" autocomplete="off"></div>
+    <div class="ig"><label>Biljka</label><input type="text" id="in-biljka" autocomplete="off"></div>
+    <div class="ig"><label>Predmet</label><input type="text" id="in-predmet" autocomplete="off"></div>
+    <div class="ig"><label>Planina</label><input type="text" id="in-planina" autocomplete="off"></div>
   </div>
 
   <div class="results hidden" id="results"></div>
@@ -81,7 +85,7 @@ const firebaseConfig = {
 
 (function(){
   var ABECEDA=['A','B','C','Č','Ć','D','Dž','Đ','E','F','G','H','I','J','K','L','Lj','M','N','Nj','O','P','R','S','Š','T','U','V','Z','Ž'];
-  var POLJA=[['drzava','Država'],['grad','Grad'],['selo','Selo'],['zivotinja','Životinja']];
+  var POLJA=[['drzava','Država'],['grad','Grad'],['selo','Selo'],['zivotinja','Životinja'],['rijeka','Rijeka'],['biljka','Biljka'],['predmet','Predmet'],['planina','Planina']];
   var ROUND_SECONDS=60;
   var $=function(id){return document.getElementById(id)};
 
@@ -115,7 +119,7 @@ const firebaseConfig = {
   function startRound(){
     var l=ABECEDA[Math.floor(Math.random()*ABECEDA.length)];
     Promise.all([answersRef.remove(),disputesRef.remove()]).then(function(){
-      return stateRef.set({status:'igra',letter:l,round:(state.round||0)+1,endsAt:now()+ROUND_SECONDS*1000});
+      return stateRef.set({status:'igra',letter:l,round:(state.round||0)+1,endsAt:0});
     });
   }
   function stopRound(){
@@ -173,7 +177,7 @@ const firebaseConfig = {
     $('nameBox').classList.toggle('hidden',s==='igra');
     $('startBtn').textContent=s==='cekanje'?'POKRENI IGRU (svi igraju)':'NOVA RUNDA (svi igraju)';
     if(s==='cekanje'){$('status').textContent='Čeka se pokretanje igre…';$('timer').textContent='';}
-    else if(s==='igra'){$('status').textContent='Runda '+state.round+' je u tijeku! Pišite!';}
+    else if(s==='igra'){$('status').textContent='Runda '+state.round+' – pišite! Prvi koji završi pritišće STOP.';}
     else{$('status').textContent='Runda završena! Provjeri tuđe odgovore.';$('timer').textContent='';}
 
     var res=$('results');
@@ -214,13 +218,7 @@ const firebaseConfig = {
 
   function runTimer(){
     clearInterval(tick);
-    if(state.status!=='igra')return;
-    function upd(){
-      var left=Math.max(0,Math.ceil((state.endsAt-now())/1000));
-      $('timer').textContent='Preostalo vrijeme: '+left+'s';
-      if(left<=0){clearInterval(tick);stopRound();}
-    }
-    upd();tick=setInterval(upd,250);
+    $('timer').textContent='';
   }
 
   stateRef.on('value',function(snap){
