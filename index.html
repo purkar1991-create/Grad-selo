@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Država Grad Selo</title>
+<style>
+:root{--primary:#4a00e0;--secondary:#8e2de2;--bg:#f4f7f6;--card:#fff;--text:#333;--muted:#666;--border:#ddd;--danger:#e74c3c;--panel:#f9f9f9;--ok:#1e9e5a}
+@media (prefers-color-scheme:dark){:root{--bg:#14131a;--card:#1f1d29;--text:#eee;--muted:#aaa;--border:#3a3750;--panel:#262436}}
+body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:var(--bg);margin:0;padding:16px;display:flex;justify-content:center;color:var(--text)}
+.game{width:100%;max-width:500px;background:var(--card);padding:22px;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.12);text-align:center}
+h1{margin:0 0 6px;color:var(--primary);font-size:26px}
+@media (prefers-color-scheme:dark){h1{color:#b891ff}}
+.status{font-style:italic;color:var(--muted);margin-bottom:10px;min-height:22px}
+.letter{font-size:72px;font-weight:bold;color:#fff;background:linear-gradient(135deg,var(--primary),var(--secondary));width:120px;height:120px;line-height:120px;margin:14px auto;border-radius:50%;box-shadow:0 5px 15px rgba(74,0,224,.4)}
+.timer{font-size:22px;font-weight:bold;color:var(--danger);margin-bottom:14px;min-height:28px}
+.btn{background:var(--primary);color:#fff;border:none;padding:13px 25px;font-size:18px;font-weight:bold;border-radius:10px;cursor:pointer;width:100%;margin-bottom:12px}
+.btn:hover{background:var(--secondary)}
+.btn:disabled{opacity:.5}
+.btn-stop{background:var(--danger)}.btn-stop:hover{background:#c0392b}
+.hidden{display:none!important}
+.inputs{text-align:left;margin-top:14px}
+.ig{margin-bottom:12px}
+.ig label{display:block;font-weight:bold;margin-bottom:4px;font-size:14px;color:var(--muted)}
+input[type=text]{width:100%;padding:12px;box-sizing:border-box;border:2px solid var(--border);border-radius:8px;font-size:16px;outline:none;background:var(--card);color:var(--text)}
+input[type=text]:focus{border-color:var(--primary)}
+.namebox{margin-bottom:12px}
+.results{text-align:left;margin-top:14px}
+.player{background:var(--panel);border-left:5px solid var(--primary);border-radius:10px;padding:12px;margin-bottom:10px}
+.player.me{border-left-color:var(--ok)}
+.player h3{margin:0 0 6px;font-size:16px;display:flex;justify-content:space-between;gap:8px}
+.row{font-size:15px;margin:3px 0;display:flex;justify-content:space-between;gap:8px}
+.row .pts{font-weight:bold;color:var(--ok);white-space:nowrap}
+.row .pts.zero{color:var(--danger)}
+.sub,.note{font-size:13px;color:var(--muted);margin-top:8px}
+</style>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+</head>
+<body>
+<div class="game">
+  <h1>Država Grad Selo</h1>
+  <div class="status" id="status">Učitavanje…</div>
+
+  <div class="namebox" id="nameBox"><input type="text" id="nameInput" placeholder="Tvoje ime" maxlength="20" autocomplete="off"></div>
+
+  <div class="letter" id="letter">?</div>
+  <div class="timer" id="timer"></div>
+
+  <button class="btn" id="startBtn" disabled>POKRENI IGRU (svi igraju)</button>
+  <button class="btn btn-stop hidden" id="stopBtn">STOP ZA SVE!</button>
+
+  <div class="inputs hidden" id="inputs">
+    <div class="ig"><label>Država</label><input type="text" id="in-drzava" autocomplete="off"></div>
+    <div class="ig"><label>Grad</label><input type="text" id="in-grad" autocomplete="off"></div>
+    <div class="ig"><label>Selo</label><input type="text" id="in-selo" autocomplete="off"></div>
+    <div class="ig"><label>Životinja</label><input type="text" id="in-zivotinja" autocomplete="off"></div>
+  </div>
+
+  <div class="results hidden" id="results"></div>
+  <div class="note" id="note"></div>
+</div>
+
+<script>
+// ===== ZALIJEPI SVOJU FIREBASE KONFIGURACIJU (Project settings → Your apps → Config) =====
+const firebaseConfig = {
+  apiKey: "AIzaSyAWdNdRFvZJPe0f-_14n0mbACTbl7NehT4",
+  authDomain: "grad-selo.firebaseapp.com",
+  databaseURL: "https://grad-selo-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "grad-selo",
+  storageBucket: "grad-selo.firebasestorage.app",
+  messagingSenderId: "897832366867",
+  appId: "1:897832366867:web:6e4ec3ce248ef47f39a0e6"
+};
+// ========================================================================================
+
+(function(){
+  var ABECEDA=['A','B','C','Č','Ć','D','Dž','Đ','E','F','G','H','I','J','K','L','Lj','M','N','Nj','O','P','R','S','Š','T','U','V','Z','Ž'];
+  var POLJA=[['drzava','Država'],['grad','Grad'],['selo','Selo'],['zivotinja','Životinja']];
+  var ROUND_SECONDS=60;
+  var $=function(id){return document.getElementById(id)};
+
+  var state={status:'cekanje',letter:'?',round:0,endsAt:0};
+  var answers={};
+  var submittedRound=-1, tick=null, lastRound=-1, lastStatus='';
+  var offset=0; // razlika sata mobitela i poslužitelja
+
+  function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v);}catch(e){}return null;}
+  var myId=store('dgs_id');
+  if(!myId){myId='p'+Math.random().toString(36).slice(2,10);store('dgs_id',myId);}
+  var myName=store('dgs_name')||'';
+  $('nameInput').value=myName;
+  $('nameInput').addEventListener('input',function(){myName=$('nameInput').value.trim();store('dgs_name',myName);});
+
+  function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+  function norm(s){return (s||'').trim().toLowerCase();}
+  function now(){return Date.now()+offset;}
+
+  if(firebaseConfig.apiKey.indexOf('VAŠ')===0){
+    $('status').textContent='Firebase konfiguracija nije upisana.';
+    $('note').textContent='Otvori index.html i zamijeni firebaseConfig svojim podacima.';
+    return;
+  }
+
+  firebase.initializeApp(firebaseConfig);
+  var fdb=firebase.database();
+  var stateRef=fdb.ref('igra/stanje');
+  var answersRef=fdb.ref('igra/odgovori');
+
+  fdb.ref('.info/serverTimeOffset').on('value',function(s){offset=s.val()||0;});
+
+  function readInputs(){var o={};POLJA.forEach(function(p){o[p[0]]=$('in-'+p[0]).value.trim();});return o;}
+
+  function startRound(){
+    var l=ABECEDA[Math.floor(Math.random()*ABECEDA.length)];
+    answersRef.remove().then(function(){
+      return stateRef.set({status:'igra',letter:l,round:(state.round||0)+1,endsAt:now()+ROUND_SECONDS*1000});
+    });
+  }
+  function stopRound(){
+    if(state.status==='igra') stateRef.update({status:'stop'});
+  }
+  function submitMine(){
+    if(submittedRound===state.round) return;
+    submittedRound=state.round;
+    answersRef.child(myId).set({name:myName||'Igrač',round:state.round,vals:readInputs()});
+  }
+
+  function score(){
+    var cur=[];
+    Object.keys(answers).forEach(function(k){if(answers[k].round===state.round)cur.push({id:k,rec:answers[k]});});
+    var L=norm(state.letter),counts={};
+    POLJA.forEach(function(p){
+      counts[p[0]]={};
+      cur.forEach(function(c){
+        var v=norm(c.rec.vals&&c.rec.vals[p[0]]);
+        if(v&&v.indexOf(L)===0)counts[p[0]][v]=(counts[p[0]][v]||0)+1;
+      });
+    });
+    var out=cur.map(function(c){
+      var total=0,rows=POLJA.map(function(p){
+        var raw=(c.rec.vals&&c.rec.vals[p[0]])||'',v=norm(raw),pts=0;
+        if(v&&v.indexOf(L)===0)pts=counts[p[0]][v]>1?5:10;
+        total+=pts;
+        return {label:p[1],raw:raw,pts:pts};
+      });
+      return {id:c.id,name:c.rec.name||'Igrač',rows:rows,total:total};
+    });
+    out.sort(function(a,b){return b.total-a.total;});
+    return out;
+  }
+
+  function render(){
+    var s=state.status;
+    $('letter').textContent=state.letter||'?';
+    $('letter').style.fontSize=(state.letter||'?').length>1?'52px':'72px';
+    $('startBtn').classList.toggle('hidden',s==='igra');
+    $('stopBtn').classList.toggle('hidden',s!=='igra');
+    $('inputs').classList.toggle('hidden',s!=='igra');
+    $('nameBox').classList.toggle('hidden',s==='igra');
+    $('startBtn').textContent=s==='cekanje'?'POKRENI IGRU (svi igraju)':'NOVA RUNDA (svi igraju)';
+    if(s==='cekanje'){$('status').textContent='Čeka se pokretanje igre…';$('timer').textContent='';}
+    else if(s==='igra'){$('status').textContent='Runda '+state.round+' je u tijeku! Pišite!';}
+    else{$('status').textContent='Runda završena!';$('timer').textContent='';}
+
+    var res=$('results');
+    if(s==='stop'){
+      var list=score(),h='';
+      list.forEach(function(p,i){
+        var me=p.id===myId;
+        h+='<div class="player'+(me?' me':'')+'"><h3><span>'+(i===0&&list.length>1?'🏆 ':'')+esc(p.name)+(me?' (ti)':'')+'</span><span>'+p.total+' bod.</span></h3>';
+        p.rows.forEach(function(r){
+          h+='<div class="row"><span>'+esc(r.label)+': '+(r.raw?esc(r.raw):'-')+'</span><span class="pts'+(r.pts?'':' zero')+'">'+r.pts+'</span></div>';
+        });
+        h+='</div>';
+      });
+      if(!list.length)h='<div class="sub">Čekam odgovore igrača…</div>';
+      h+='<div class="sub">Bodovi: 10 za jedinstven pojam, 5 ako ga je upisao još netko, 0 ako je prazno ili ne počinje zadanim slovom.</div>';
+      res.innerHTML=h;res.classList.remove('hidden');
+    } else res.classList.add('hidden');
+    runTimer();
+  }
+
+  function runTimer(){
+    clearInterval(tick);
+    if(state.status!=='igra')return;
+    function upd(){
+      var left=Math.max(0,Math.ceil((state.endsAt-now())/1000));
+      $('timer').textContent='Preostalo vrijeme: '+left+'s';
+      if(left<=0){clearInterval(tick);stopRound();}
+    }
+    upd();tick=setInterval(upd,250);
+  }
+
+  stateRef.on('value',function(snap){
+    var v=snap.val();
+    state=v?Object.assign({status:'cekanje',letter:'?',round:0,endsAt:0},v):{status:'cekanje',letter:'?',round:0,endsAt:0};
+    if(state.status==='igra'&&state.round!==lastRound){
+      POLJA.forEach(function(p){$('in-'+p[0]).value='';});
+      submittedRound=-1;
+    }
+    if(state.status==='stop'&&lastStatus==='igra')submitMine();
+    lastRound=state.round;lastStatus=state.status;
+    render();
+  },function(e){$('status').textContent='Greška baze: '+e.message;});
+
+  answersRef.on('value',function(snap){
+    answers=snap.val()||{};
+    if(state.status==='stop')render();
+  });
+
+  $('startBtn').disabled=false;
+  $('startBtn').addEventListener('click',startRound);
+  $('stopBtn').addEventListener('click',stopRound);
+  $('note').textContent='Svi koji otvore ovaj link igraju istu rundu.';
+})();
+</script>
+</body>
+</html>
