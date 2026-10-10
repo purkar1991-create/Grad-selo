@@ -11,6 +11,7 @@ body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;background:var(--bg
 .game{width:100%;max-width:500px;background:var(--card);padding:22px;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,.12);text-align:center}
 h1{margin:0 0 6px;color:var(--primary);font-size:26px}
 @media (prefers-color-scheme:dark){h1{color:#b891ff}}
+.presence{font-size:14px;color:var(--muted);margin-bottom:12px}
 .status{font-style:italic;color:var(--muted);margin-bottom:10px;min-height:22px}
 .letter{font-size:72px;font-weight:bold;color:#fff;background:linear-gradient(135deg,var(--primary),var(--secondary));width:120px;height:120px;line-height:120px;margin:14px auto;border-radius:50%;box-shadow:0 5px 15px rgba(74,0,224,.4)}
 .timer{font-size:22px;font-weight:bold;color:var(--danger);margin-bottom:14px;min-height:28px}
@@ -48,6 +49,7 @@ input[type=text]:focus{border-color:var(--primary)}
 <div class="game">
   <h1>Država Grad Selo</h1>
   <div class="status" id="status">Učitavanje…</div>
+  <div class="presence" id="presence"></div>
 
   <div class="namebox" id="nameBox"><input type="text" id="nameInput" placeholder="Tvoje ime" maxlength="20" autocomplete="off"></div>
 
@@ -86,7 +88,7 @@ const firebaseConfig = {
 (function(){
   var ABECEDA=['A','B','C','Č','Ć','D','Dž','Đ','E','F','G','H','I','J','K','L','Lj','M','N','Nj','O','P','R','S','Š','T','U','V','Z','Ž'];
   var POLJA=[['drzava','Država'],['grad','Grad'],['selo','Selo'],['zivotinja','Životinja'],['rijeka','Rijeka'],['biljka','Biljka'],['predmet','Predmet'],['planina','Planina']];
-  var ROUND_SECONDS=60;
+  var ROUND_SECONDS=300;
   var $=function(id){return document.getElementById(id)};
 
   var state={status:'cekanje',letter:'?',round:0,endsAt:0};
@@ -100,7 +102,7 @@ const firebaseConfig = {
   if(!myId){myId='p'+Math.random().toString(36).slice(2,10);store('dgs_id',myId);}
   var myName=store('dgs_name')||'';
   $('nameInput').value=myName;
-  $('nameInput').addEventListener('input',function(){myName=$('nameInput').value.trim();store('dgs_name',myName);});
+  $('nameInput').addEventListener('input',function(){myName=$('nameInput').value.trim();store('dgs_name',myName);updatePresence();});
 
   function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
   function norm(s){return (s||'').trim().toLowerCase();}
@@ -112,6 +114,24 @@ const firebaseConfig = {
   var answersRef=fdb.ref('igra/odgovori');
   var disputesRef=fdb.ref('igra/osporavanja');
 
+  /* ---------- tko je u igri ---------- */
+  var presRef=fdb.ref('igra/igraci'),myPres=presRef.child(myId),players={};
+  function updatePresence(){
+    try{myPres.set({name:myName||'Igrač'});}catch(e){}
+  }
+  fdb.ref('.info/connected').on('value',function(s){
+    if(s.val()===true){myPres.onDisconnect().remove();updatePresence();}
+  });
+  function renderPresence(){
+    var ids=Object.keys(players);
+    var names=ids.map(function(id){
+      var n=(players[id]&&players[id].name)||'Igrač';
+      return esc(n)+(id===myId?' (ti)':'');
+    });
+    $('presence').innerHTML='👥 U igri ('+ids.length+'): '+(names.join(', ')||'-');
+  }
+  presRef.on('value',function(snap){players=snap.val()||{};renderPresence();});
+
   fdb.ref('.info/serverTimeOffset').on('value',function(s){offset=s.val()||0;});
 
   function readInputs(){var o={};POLJA.forEach(function(p){o[p[0]]=$('in-'+p[0]).value.trim();});return o;}
@@ -119,7 +139,7 @@ const firebaseConfig = {
   function startRound(){
     var l=ABECEDA[Math.floor(Math.random()*ABECEDA.length)];
     Promise.all([answersRef.remove(),disputesRef.remove()]).then(function(){
-      return stateRef.set({status:'igra',letter:l,round:(state.round||0)+1,endsAt:0});
+      return stateRef.set({status:'igra',letter:l,round:(state.round||0)+1,endsAt:now()+ROUND_SECONDS*1000});
     });
   }
   function stopRound(){
@@ -175,10 +195,10 @@ const firebaseConfig = {
     $('stopBtn').classList.toggle('hidden',s!=='igra');
     $('inputs').classList.toggle('hidden',s!=='igra');
     $('nameBox').classList.toggle('hidden',s==='igra');
-    $('startBtn').textContent=s==='cekanje'?'POKRENI IGRU (svi igraju)':'NOVA RUNDA (svi igraju)';
+    $('startBtn').textContent=s==='cekanje'?'POKRENI IGRU (svi igraju)':'NOVA IGRA (svi igraju)';
     if(s==='cekanje'){$('status').textContent='Čeka se pokretanje igre…';$('timer').textContent='';}
-    else if(s==='igra'){$('status').textContent='Runda '+state.round+' – pišite! Prvi koji završi pritišće STOP.';}
-    else{$('status').textContent='Runda završena! Provjeri tuđe odgovore.';$('timer').textContent='';}
+    else if(s==='igra'){$('status').textContent='Pišite! Prvi koji završi pritišće STOP.';}
+    else{$('status').textContent='Gotovo! Provjeri tuđe odgovore.';$('timer').textContent='';}
 
     var res=$('results');
     if(s==='stop'){
@@ -218,7 +238,14 @@ const firebaseConfig = {
 
   function runTimer(){
     clearInterval(tick);
-    $('timer').textContent='';
+    if(state.status!=='igra')return;
+    function upd(){
+      var left=Math.max(0,Math.ceil((state.endsAt-now())/1000));
+      var m=Math.floor(left/60),sec=left%60;
+      $('timer').textContent='Preostalo vrijeme: '+m+':'+(sec<10?'0':'')+sec;
+      if(left<=0){clearInterval(tick);stopRound();}
+    }
+    upd();tick=setInterval(upd,250);
   }
 
   stateRef.on('value',function(snap){
@@ -245,7 +272,7 @@ const firebaseConfig = {
   $('startBtn').disabled=false;
   $('startBtn').addEventListener('click',startRound);
   $('stopBtn').addEventListener('click',stopRound);
-  $('note').textContent='Svi koji otvore ovaj link igraju istu rundu.';
+  $('note').textContent='Svi koji otvore ovaj link igraju zajedno.';
 })();
 </script>
 </body>
